@@ -116,3 +116,73 @@ def build_team_defensive_features(data_dir):
     )
 
     return team_summary.join(block_share).join(press).join(shape)
+
+
+PHASE_MODEL_DYNAMIC_COLS = [
+    "match_id", "event_type", "event_subtype", "team_id", "phase_index",
+    "last_defensive_line_height_start", "game_state",
+]
+
+
+def build_phase_level_table(data_dir):
+    """One row per defensive phase (n~8,834), with within-phase event flags for modeling.
+
+    Unlike build_team_defensive_features (one row per team, n=13), this keeps every phase as
+    its own observation -- the unit needed for a properly powered controlled model. See
+    notebooks/04_controlled_model.ipynb for how each column is used and validated.
+    """
+    match_ids, match_meta, team_names = load_match_meta(data_dir)
+
+    phase_frames = []
+    eng_agg_frames, run_agg_frames, lh_frames, gs_frames = [], [], [], []
+    for mid in match_ids:
+        mm = match_meta[mid]
+        other = {mm["home_id"]: mm["away_id"], mm["away_id"]: mm["home_id"]}
+
+        ph = pd.read_csv(f"{data_dir}/{mid}/{mid}_phases_of_play.csv")
+        ph["defending_team"] = ph["team_in_possession_id"].map(other).map(team_names)
+        ph["match_id"] = mid
+        phase_frames.append(ph)
+
+        dyn = pd.read_csv(f"{data_dir}/{mid}/{mid}_dynamic_events.csv", usecols=lambda c: c in PHASE_MODEL_DYNAMIC_COLS, low_memory=False)
+        dyn["match_id"] = mid
+
+        obe = dyn[dyn["event_type"] == "on_ball_engagement"]
+        eng_agg_frames.append(obe.groupby(["match_id", "phase_index"]).agg(
+            n_engagements_in_phase=("event_subtype", "size"),
+            has_pressing=("event_subtype", lambda s: (s == "pressing").any()),
+            has_counter_or_recovery_press=("event_subtype", lambda s: s.isin(["counter_press", "recovery_press"]).any()),
+        ).reset_index())
+
+        obr = dyn[dyn["event_type"] == "off_ball_run"]
+        run_agg_frames.append(obr.groupby(["match_id", "phase_index"]).agg(
+            n_runs_in_phase=("event_subtype", "size"),
+            has_behind_run=("event_subtype", lambda s: (s == "behind").any()),
+        ).reset_index())
+
+        pp = dyn[dyn["event_type"] == "player_possession"]
+        lh_frames.append(pp.groupby(["match_id", "phase_index"]).agg(
+            mean_last_line_height=("last_defensive_line_height_start", "mean"),
+        ).reset_index())
+
+        gs_frames.append(
+            dyn.dropna(subset=["game_state"]).groupby(["match_id", "phase_index"])["game_state"].first().reset_index()
+        )
+
+    phases = pd.concat(phase_frames, ignore_index=True)
+    eng_agg = pd.concat(eng_agg_frames, ignore_index=True)
+    run_agg = pd.concat(run_agg_frames, ignore_index=True)
+    lh_agg = pd.concat(lh_frames, ignore_index=True)
+    gs_agg = pd.concat(gs_frames, ignore_index=True)
+
+    model_df = phases.merge(eng_agg, left_on=["match_id", "index"], right_on=["match_id", "phase_index"], how="left")
+    model_df = model_df.merge(run_agg, left_on=["match_id", "index"], right_on=["match_id", "phase_index"], how="left", suffixes=("", "_run"))
+    model_df = model_df.merge(lh_agg, left_on=["match_id", "index"], right_on=["match_id", "phase_index"], how="left", suffixes=("", "_lh"))
+    model_df = model_df.merge(gs_agg, left_on=["match_id", "index"], right_on=["match_id", "phase_index"], how="left", suffixes=("", "_gs"))
+
+    # NaN here is structural ("no such event happened in this phase"), not missing data -- verified in Notebook 4.
+    for c in ["has_pressing", "has_counter_or_recovery_press", "has_behind_run"]:
+        model_df[c] = model_df[c].fillna(False)
+
+    model_df["def_area_end"] = model_df["team_out_of_possession_width_end"] * model_df["team_out_of_possession_length_end"]
+    return model_df
