@@ -86,3 +86,35 @@ def build_counterattack_tables(data_dir):
     counterattacks = pd.concat(ca_frames, ignore_index=True)
     trajectories = pd.concat(traj_frames, ignore_index=True)
     return counterattacks, trajectories
+
+
+def normalize_attack_direction(trajectories, counterattacks):
+    """Rotates right_to_left phases 180 degrees so the attacking team always attacks towards +x.
+
+    Raw tracking is NOT attack-normalised (unlike dynamic_events x/y): verified in notebook 06 --
+    counters that end in a shot finish with the ball near x=+48 for left_to_right and x=-47 for
+    right_to_left. Both x and y are flipped (a rotation, not a mirror) so each wing stays the
+    attacker's same wing.
+    """
+    out = trajectories.merge(counterattacks[["match_id", "phase_id", "attacking_side"]], on=["match_id", "phase_id"])
+    flip = out["attacking_side"] == "right_to_left"
+    out.loc[flip, "x"] = -out.loc[flip, "x"]
+    out.loc[flip, "y"] = -out.loc[flip, "y"]
+    return out.drop(columns="attacking_side")
+
+
+def load_or_build_counterattacks(data_dir, cache_dir):
+    """Cached, attack-normalised tables. The cache is derived SkillCorner data, so it stays gitignored."""
+    from pathlib import Path
+
+    cache = Path(cache_dir)
+    ca_path, tr_path = cache / "counterattacks.parquet", cache / "counter_trajectories.parquet"
+    if ca_path.exists() and tr_path.exists():
+        return pd.read_parquet(ca_path), pd.read_parquet(tr_path)
+
+    counterattacks, trajectories = build_counterattack_tables(data_dir)
+    trajectories = normalize_attack_direction(trajectories, counterattacks)
+    cache.mkdir(parents=True, exist_ok=True)
+    counterattacks.to_parquet(ca_path)
+    trajectories.to_parquet(tr_path)
+    return counterattacks, trajectories
