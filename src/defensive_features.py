@@ -186,3 +186,40 @@ def build_phase_level_table(data_dir):
 
     model_df["def_area_end"] = model_df["team_out_of_possession_width_end"] * model_df["team_out_of_possession_length_end"]
     return model_df
+
+
+SHOT_COLS = [
+    "match_id", "event_type", "end_type", "team_id", "phase_index",
+    "x_end", "y_end", "x_start", "y_start", "attacking_side", "penalty_area_end",
+    "third_end", "game_state",
+]
+
+
+def build_shot_table(data_dir):
+    """One row per shot (n~526), with the DEFENDING team and a goal-distance in metres.
+
+    IMPORTANT, verified empirically in notebooks/05_shot_quality_model.ipynb: x/y on
+    dynamic_events rows are already attack-normalised (the attacked goal is always at x=+52.5),
+    so `attacking_side` must NOT be used to flip coordinates here -- doing so (the natural first
+    guess) silently produces nonsense distances for ~45% of shots. Left documented so nobody
+    reusing this module reintroduces that bug.
+    """
+    match_ids, match_meta, team_names = load_match_meta(data_dir)
+
+    shot_frames = []
+    for mid in match_ids:
+        mm = match_meta[mid]
+        other = {mm["home_id"]: mm["away_id"], mm["away_id"]: mm["home_id"]}
+
+        dyn = pd.read_csv(f"{data_dir}/{mid}/{mid}_dynamic_events.csv", usecols=lambda c: c in SHOT_COLS, low_memory=False)
+        dyn["match_id"] = mid
+        pp = dyn[dyn["event_type"] == "player_possession"]
+        shots = pp[pp["end_type"] == "shot"].copy()
+        shots["defending_team"] = shots["team_id"].map(other).map(team_names)
+        shot_frames.append(shots)
+
+    shots = pd.concat(shot_frames, ignore_index=True)
+    shots["shot_x"] = shots["x_end"].fillna(shots["x_start"])
+    shots["shot_y"] = shots["y_end"].fillna(shots["y_start"])
+    shots["distance_to_goal"] = np.sqrt((52.5 - shots["shot_x"]) ** 2 + shots["shot_y"] ** 2)
+    return shots
