@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "turnover-cost"
+version = "0.1.0"
+description = "What does it cost to lose the ball here? A turnover-cost surface and pass risk lens for SkillCorner data."
+readme = "README.md"
+license = { file = "LICENSE.md" }
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "pyarrow",
+    "scipy",
+    "statsmodels>=0.14",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+notebooks = ["matplotlib", "mplsoccer", "jupyter", "nbconvert", "nbformat", "ipykernel"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["turnovers", "pass_risk", "defensive_features", "counter_attacks"]

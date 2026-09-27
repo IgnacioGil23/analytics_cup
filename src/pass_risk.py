@@ -157,3 +157,17 @@ def score_options(options, surface, geometry, **kw):
     o["risk"] = (1 - o["xpass"]) * o["loss_cost"]
     o["reward"] = o["xpass"] * o["xthreat"]
     return o
+
+
+# ---------------------------------------------------------------- one-call entry points
+def fit_lens(data_dir, cache_dir="data/processed"):
+    """Fit the cost surface and the failure geometry from the SkillCorner open data. Returns (surface, geometry)."""
+    from turnovers import load_or_build_turnovers
+
+    turnovers, _ = load_or_build_turnovers(data_dir, cache_dir)
+    return CostSurface.fit(turnover_training_table(data_dir, turnovers)), failed_pass_geometry(data_dir, turnovers)
+
+
+def price_passes(data_dir, match_ids, surface, geometry):
+    """Every passing option of the given matches priced in expected goals: risk, reward, and which one was played."""
+    return score_options(load_passing_options(data_dir, set(match_ids)), surface, geometry)
