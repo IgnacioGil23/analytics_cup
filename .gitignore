@@ -20,3 +20,7 @@ env/
 
 # Env / secrets
 .env
+
+# Generated explorer page (embeds derived SkillCorner data)
+output/
+.claude/

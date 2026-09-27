@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Turnover Cost Explorer</title>
+<style>
+:root{--bg:#f6f5f2;--card:#ffffff;--ink:#1d1d1f;--muted:#6b6b70;--line:#d9d7d2;--pitch:#eef3ec;--pitchline:#9aa79a;
+--accent:#c53030;--safe:#2b6cb0;--chip:#f0eee9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141416;--card:#1d1d20;--ink:#ececef;--muted:#9a9aa2;--line:#34343a;
+--pitch:#1b2420;--pitchline:#55655a;--accent:#f06262;--safe:#6aa6e8;--chip:#2a2a2f}}
+:root[data-theme="dark"]{--bg:#141416;--card:#1d1d20;--ink:#ececef;--muted:#9a9aa2;--line:#34343a;--pitch:#1b2420;--pitchline:#55655a;
+--accent:#f06262;--safe:#6aa6e8;--chip:#2a2a2f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1080px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:28px;line-height:1.2;margin:0 0 6px}
+h2{font-size:18px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 20px;max-width:760px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:0 0 18px}
+.note{color:var(--muted);font-size:13px;margin:6px 0 12px}
+svg{display:block;width:100%;height:auto}
+.row{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:16px}
+@media (max-width:820px){.row{grid-template-columns:1fr}}
+.controls{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+select{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:14px;max-width:100%}
+.list{max-height:380px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.item{padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px;display:flex;justify-content:space-between;gap:8px}
+.item:hover{background:var(--chip)} .item.sel{background:var(--chip);box-shadow:inset 3px 0 0 var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--line)} th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600}
+.chip{display:inline-block;background:var(--chip);border-radius:999px;padding:2px 9px;font-size:12px;margin:2px 4px 2px 0}
+.chip.bad{color:var(--accent)} .chip.good{color:var(--safe)}
+#tip{position:fixed;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;display:none;z-index:5}
+.bar{height:14px;background:var(--accent);border-radius:3px}
+.legend{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.legend .ramp{height:10px;width:160px;border-radius:3px}
+button.theme{float:right;background:var(--chip);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 10px;font:inherit;font-size:13px;cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+<button class="theme" id="theme">Theme</button>
+<h1>What does it cost to lose the ball here?</h1>
+<p class="sub">A pass risk lens for SkillCorner data. Every pass, and every option the passer had, is priced in
+<b>expected goals conceded</b>: the chance it fails (SkillCorner's pass model) times what losing the ball
+where it would die costs (learned from open-play turnovers). It shows the trade-off, not a verdict.</p>
+
+<section class="card">
+<h2>1 · The cost map</h2>
+<p class="note">Expected goals conceded per 100 balls lost at each point (a rival shot within 15 s × goals per shot).
+Your own goal is on the left. Hover the pitch.</p>
+<svg id="costmap" viewBox="-54 -36 108 72"></svg>
+<div class="legend" id="legend"></div>
+</section>
+
+<section class="card">
+<h2>2 · Pass explorer</h2>
+<p class="note">Pick a match and a team, then a pass. Arrows are the options the passer had, labelled with their chance of arriving;
+the solid one is the pass played. Colour = risk on a fixed scale (<span style="color:rgb(74,144,226)">safe</span> →
+<span style="color:rgb(224,49,49)">≥10</span>), in expected goals conceded per 1,000 such passes.</p>
+<div class="controls">
+<select id="match"></select><select id="team"></select>
+<select id="zone"><option value="all">all zones</option><option value="own">from own third</option><option value="mid">from middle third</option><option value="riv">from rival third</option></select>
+<select id="sort"><option value="risk">riskiest pass played first</option><option value="gap">biggest risk vs safest option</option><option value="time">match order</option></select>
+</div>
+<div class="row">
+<div><svg id="passmap" viewBox="-54 -36 108 72"></svg><div id="detail"></div></div>
+<div class="list" id="list"></div>
+</div>
+</section>
+
+<section class="card">
+<h2>3 · Team risk profiles</h2>
+<p class="note">Risk of the passes each team played, per 1,000 passes, and the share of it created in their own third.
+Teams have 1–7 matches in this sample: indicative, not a ranking.</p>
+<div id="teams"></div>
+</section>
+
+<section class="card">
+<h2>How it works, and its limits</h2>
+<p class="note" style="margin:0">Cost surface: logistic model of a rival shot within 15 s by where the ball was lost (chosen on held-out matches, calibrated).
+Where a failed pass dies: replayed from real misplaced passes (most die near the intended receiver).
+Validation: on matches the model never saw, the risk predicts passes followed by a rival shot better than SkillCorner's failure probability alone.
+Limits: the cost is <i>immediate</i> danger, not the value of losing possession high up; 20 matches of one league;
+it does not tell which option was "right" — that was tested and is not supported.</p>
+</section>
+</main>
+<div id="tip"></div>
+<script>
+const DATA = /*__DATA__*/null;
+const NS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function ramp(t) { // 0..1 -> light to dark red
+  t = Math.max(0, Math.min(1, t));
+  const a = [254, 240, 232], b = [211, 60, 50], c = [110, 12, 20];
+  const [p, q, s] = t < .5 ? [a, b, t * 2] : [b, c, (t - .5) * 2];
+  return `rgb(${p.map((v, i) => Math.round(v + (q[i] - v) * s)).join(",")})`;
+}
+
+// fixed scale, comparable across passes: blue = safe (0) ... red = risky (>= 10 goals per 1000)
+function riskColour(r) {
+  const t = Math.max(0, Math.min(1, r / 10)), blue = [74, 144, 226], mid = [240, 190, 60], red = [224, 49, 49];
+  const [p, q, s] = t < .5 ? [blue, mid, t * 2] : [mid, red, (t - .5) * 2];
+  return `rgb(${p.map((v, i) => Math.round(v + (q[i] - v) * s)).join(",")})`;
+}
+function drawPitch(svg) {
+  const g = el("g", {fill: "none", stroke: css("--pitchline"), "stroke-width": .35}, svg);
+  el("rect", {x: -52.5, y: -34, width: 105, height: 68}, g);
+  el("line", {x1: 0, y1: -34, x2: 0, y2: 34}, g);
+  el("circle", {cx: 0, cy: 0, r: 9.15}, g);
+  for (const s of [-1, 1]) {
+    el("rect", {x: s < 0 ? -52.5 : 52.5 - 16.5, y: -20.16, width: 16.5, height: 40.32}, g);
+    el("rect", {x: s < 0 ? -52.5 : 52.5 - 5.5, y: -9.16, width: 5.5, height: 18.32}, g);
+    el("line", {x1: s * 52.5, y1: -3.66, x2: s * 52.5, y2: 3.66, "stroke-width": 1.2}, g);
+  }
+  return g;
+}
+const tip = $("tip");
+const showTip = (e, html) => { tip.innerHTML = html; tip.style.display = "block"; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; };
+const hideTip = () => tip.style.display = "none";
+
+// ---------- 1. cost map
+function drawCostMap() {
+  const svg = $("costmap"); svg.innerHTML = "";
+  el("rect", {x: -54, y: -36, width: 108, height: 72, fill: css("--card")}, svg);
+  const {xs, ys, v} = DATA.grid, vmax = Math.max(...v.flat());
+  const dx = xs[1] - xs[0], dy = ys[1] - ys[0];
+  ys.forEach((y, j) => xs.forEach((x, i) => {
+    const r = el("rect", {x: x - dx / 2, y: -y - dy / 2, width: dx + .05, height: dy + .05, fill: ramp(v[j][i] / vmax), "shape-rendering": "crispEdges"}, svg);
+    r.addEventListener("mousemove", e => showTip(e, `<b>${v[j][i].toFixed(2)}</b> goals conceded per 100 losses<br>≈ 1 rival shot in ${Math.round(100 / (v[j][i] / DATA.goals_per_shot))} losses`));
+    r.addEventListener("mouseleave", hideTip);
+  }));
+  drawPitch(svg).setAttribute("pointer-events", "none");
+  $("legend").innerHTML = `0 <div class="ramp" style="background:linear-gradient(90deg,${ramp(0)},${ramp(.5)},${ramp(1)})"></div> ${vmax.toFixed(1)} goals / 100 losses`;
+}
+
+// ---------- 2. pass explorer
+const zoneOf = px => px < -17.5 ? "own" : px > 17.5 ? "riv" : "mid";
+const clock = f => { const s = Math.floor(f / 10); return `${Math.floor(s / 60)}'${String(s % 60).padStart(2, "0")}`; };
+let current = null;
+function fillMatches() {
+  const ms = Object.entries(DATA.matches).sort((a, b) => a[1].date.localeCompare(b[1].date));
+  $("match").innerHTML = ms.map(([id, m]) => `<option value="${id}">${m.date} · ${m.label}</option>`).join("");
+  fillTeams();
+}
+function fillTeams() {
+  const teams = [...new Set(DATA.passes.filter(p => p.m === $("match").value).map(p => p.t))];
+  $("team").innerHTML = teams.map(t => `<option>${t}</option>`).join("");
+  fillList();
+}
+function fillList() {
+  const z = $("zone").value, s = $("sort").value;
+  let ps = DATA.passes.filter(p => p.m === $("match").value && p.t === $("team").value && (z === "all" || zoneOf(p.px) === z));
+  const played = p => p.o.find(o => o[5]), safest = p => Math.min(...p.o.map(o => o[3]));
+  if (s === "risk") ps.sort((a, b) => played(b)[3] - played(a)[3]);
+  else if (s === "gap") ps.sort((a, b) => (played(b)[3] - safest(b)) - (played(a)[3] - safest(a)));
+  else ps.sort((a, b) => a.f - b.f);
+  $("list").innerHTML = ps.slice(0, 300).map((p, i) => `<div class="item" data-i="${i}"><span>${clock(p.f)} · ${p.p}</span><span>risk ${played(p)[3].toFixed(1)}</span></div>`).join("")
+    || `<div class="item">No passes for this filter.</div>`;
+  [...$("list").children].forEach((d, i) => d.onclick = () => select(ps[i], d));
+  if (ps.length) select(ps[0], $("list").firstElementChild);
+}
+function select(p, node) {
+  current = p;
+  [...$("list").children].forEach(c => c.classList.remove("sel")); if (node) node.classList.add("sel");
+  drawPass(p);
+}
+function drawPass(p) {
+  const svg = $("passmap"); svg.innerHTML = "";
+  el("rect", {x: -52.5, y: -34, width: 105, height: 68, fill: css("--pitch")}, svg);
+  drawPitch(svg);
+  const defs = el("defs", {}, svg);
+  p.o.forEach((o, i) => {
+    const c = riskColour(o[3]);
+    const m = el("marker", {id: "a" + i, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 4, markerHeight: 4, orient: "auto"}, defs);
+    el("path", {d: "M0,0 L10,5 L0,10 z", fill: c}, m);
+    const ln = el("line", {x1: p.px, y1: -p.py, x2: o[0], y2: -o[1], stroke: c, "stroke-width": o[5] ? 1.4 : .7, "marker-end": `url(#a${i})`,
+      "stroke-dasharray": o[5] ? "" : "1.5 1"}, svg);
+    ln.addEventListener("mousemove", e => showTip(e, `P(arrives) ${(o[2] * 100).toFixed(0)}%<br>risk ${o[3].toFixed(2)} · threat ${o[4].toFixed(2)}`));
+    ln.addEventListener("mouseleave", hideTip);
+    el("circle", {cx: o[0], cy: -o[1], r: 1.2, fill: c}, svg);
+    const lbl = el("text", {x: o[0], y: -o[1] - 2.2, "text-anchor": "middle", "font-size": 2.6, fill: c, "font-weight": o[5] ? 700 : 400,
+      stroke: css("--pitch"), "stroke-width": .6, "paint-order": "stroke"}, svg);
+    lbl.textContent = `${Math.round(o[2] * 100)}%`;
+  });
+  el("circle", {cx: p.px, cy: -p.py, r: 1.6, fill: css("--ink")}, svg);
+  const rows = p.o.map(o => ({xp: o[2], r: o[3], w: o[4], played: o[5]})).sort((a, b) => b.played - a.played || a.r - b.r);
+  const saf = Math.min(...rows.map(r => r.r)), pl = rows.find(r => r.played);
+  $("detail").innerHTML = `<div style="margin-top:8px"><span class="chip">${clock(p.f)}</span><span class="chip">${p.p}${p.role ? " · " + p.role : ""}</span>
+    ${p.pr ? `<span class="chip">${p.pr.replace("_", " ")}</span>` : ""}${p.gs ? `<span class="chip">${p.gs}</span>` : ""}
+    <span class="chip ${p.rs ? "bad" : ""}">${p.rs ? "rival shot within 15 s" : "no rival shot"}</span>
+    <span class="chip ${p.os ? "good" : ""}">${p.os ? "own shot within 15 s" : "no own shot"}</span></div>
+    <table><tr><th>option</th><th>P(arrives)</th><th>risk</th><th>threat</th></tr>
+    ${rows.map(r => `<tr><td>${r.played ? "<b>played</b>" : "alternative"}</td><td>${(r.xp * 100).toFixed(0)}%</td><td>${r.r.toFixed(2)}</td><td>${r.w.toFixed(2)}</td></tr>`).join("")}</table>
+    <p class="note">${pl.r > saf * 1.5 && pl.r - saf > .3 ? `The pass played carried ${(pl.r / Math.max(saf, .01)).toFixed(1)}× the risk of the safest option.` : "The pass played was among the safest available."}</p>`;
+}
+
+// ---------- 3. team profiles
+function drawTeams() {
+  const mx = Math.max(...DATA.teams.map(t => t.risk_per_1000));
+  $("teams").innerHTML = `<table><tr><th>team</th><th>matches</th><th>passes</th><th style="width:40%">risk per 1,000 passes</th><th>from own third</th></tr>
+    ${DATA.teams.map(t => `<tr><td>${t.team}</td><td>${t.matches}</td><td>${t.passes}</td>
+    <td><div style="display:flex;align-items:center;gap:6px;justify-content:flex-end"><span>${t.risk_per_1000.toFixed(2)}</span><div class="bar" style="width:${Math.round(100 * t.risk_per_1000 / mx)}%"></div></div></td>
+    <td>${Math.round(100 * t.own_share)}%</td></tr>`).join("")}</table>`;
+}
+
+["match"].forEach(i => $(i).onchange = fillTeams);
+["team", "zone", "sort"].forEach(i => $(i).onchange = fillList);
+$("theme").onclick = () => { const r = document.documentElement; r.dataset.theme = (r.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")) === "dark" ? "light" : "dark"; drawCostMap(); if (current) drawPass(current); };
+drawCostMap(); fillMatches(); drawTeams();
+</script>
+</body>
+</html>
