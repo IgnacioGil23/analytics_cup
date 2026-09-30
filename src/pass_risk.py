@@ -159,6 +159,48 @@ def score_options(options, surface, geometry, **kw):
     return o
 
 
+# ---------------------------------------------------------------- tracking at the pass moment
+def load_or_build_pass_frames(data_dir, cache_dir="data/processed"):
+    """Every player's position at the moment of every pass (the passer's frame_end), rotated into the
+    passing team's attack frame (attacked goal at +x), i.e. the same frame as the event coordinates.
+
+    Raw tracking is NOT attack-normalised (notebook 06), so each frame is rotated 180 degrees when the
+    passing team attacks right_to_left in that period.
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(cache_dir) / "pass_frames.parquet"
+    if path.exists():
+        return pd.read_parquet(path)
+    rows = []
+    for d in sorted(glob.glob(f"{data_dir}/*")):
+        mid = d.replace("\\", "/").split("/")[-1]
+        m = json.load(open(f"{d}/{mid}_match.json", encoding="utf-8"))
+        team_of = {p["id"]: p["team_id"] for p in m["players"]}
+        gk = {p["id"] for p in m["players"] if p["player_role"]["name"] == "Goalkeeper"}
+        ev = pd.read_csv(f"{d}/{mid}_dynamic_events.csv", low_memory=False,
+                         usecols=["event_id", "event_type", "end_type", "team_id", "frame_end", "attacking_side"])
+        ps = ev[(ev["event_type"] == "player_possession") & (ev["end_type"] == "pass")]
+        want = {}
+        for r in ps.itertuples():
+            want.setdefault(int(r.frame_end), []).append((f"{mid}|{r.event_id}", r.team_id, 1 if r.attacking_side == "left_to_right" else -1))
+        with open(f"{d}/{mid}_tracking_extrapolated.jsonl", encoding="utf-8") as fh:
+            for line in fh:
+                fr = int(line.split('"frame":', 1)[1].split(",", 1)[0])
+                if fr not in want:
+                    continue
+                t = json.loads(line)
+                for key, team, sgn in want[fr]:
+                    for p in t["player_data"]:
+                        role = "passing" if team_of.get(p["player_id"]) == team else "defending"
+                        rows.append((key, p["player_id"], role, p["player_id"] in gk, p["x"] * sgn, p["y"] * sgn))
+    out = pd.DataFrame(rows, columns=["pass_key", "player_id", "role", "is_goalkeeper", "x", "y"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(path)
+    return out
+
+
 # ---------------------------------------------------------------- one-call entry points
 def fit_lens(data_dir, cache_dir="data/processed"):
     """Fit the cost surface and the failure geometry from the SkillCorner open data. Returns (surface, geometry)."""
